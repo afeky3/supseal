@@ -1,0 +1,218 @@
+name: supseal
+
+networks:
+  edge:
+    name: supseal_edge
+  data:
+    name: supseal_data
+
+volumes:
+  postgres_data:
+  redis_data:
+  letsencrypt:
+  batch_exports:
+
+services:
+  traefik:
+    image: traefik:v3.5
+    restart: unless-stopped
+    command:
+      - --configFile=/etc/traefik/traefik.yml
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - letsencrypt:/letsencrypt
+    networks:
+      - edge
+
+  # Throwaway static landing page for "/" until the real consumer PWA
+  # (apps/consumer-web, not built yet) exists to serve it. Delete this
+  # service and its Traefik route once that lands.
+  placeholder:
+    image: nginx:alpine
+    restart: unless-stopped
+    volumes:
+      - ./placeholder:/usr/share/nginx/html:ro
+    networks:
+      - edge
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      SUPSEAL_VERIFY_PASSWORD: ${SUPSEAL_VERIFY_PASSWORD}
+      SUPSEAL_APP_PASSWORD: ${SUPSEAL_APP_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # One-off migration runner: `docker compose run --rm migrate`. Uses the
+  # POSTGRES_USER superuser/owner credentials (DDL rights), which is why it
+  # is never the identity platform-api runs as at request time — see the
+  # comment in infra/postgres-init/01-roles.sh.
+  migrate:
+    build:
+      context: ..
+      dockerfile: apps/platform-api/Dockerfile
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    entrypoint: ["npx", "prisma", "migrate", "deploy", "--schema", "/repo/packages/database/prisma/schema.prisma"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - data
+
+  platform-api:
+    build:
+      context: ..
+      dockerfile: apps/platform-api/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://supseal_app:${SUPSEAL_APP_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      # Sticker batch generation hashes codes with the same pepper
+      # verification-service uses to look them up — must match exactly.
+      HIDDEN_CODE_PEPPER: ${HIDDEN_CODE_PEPPER}
+      # QR codes on generated PDFs encode <this>/<qrToken>. There is no
+      # consumer-facing page at this path yet (the consumer PWA isn't built)
+      # — printed stickers are forward-compatible with it, not functional
+      # with it today. See apps/platform-api/src/sticker-batches/batch-pdf.util.ts.
+      PUBLIC_VERIFY_BASE_URL: https://supseal.msaratech.com/v
+      EXPORTS_DIR: /data/exports
+      PORT: 3000
+    volumes:
+      - batch_exports:/data/exports
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - edge
+      - data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  consumer-web:
+    build:
+      context: ..
+      dockerfile: apps/consumer-web/Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: 3004
+      HOSTNAME: "0.0.0.0"
+    networks:
+      - edge
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3004/v"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  brand-admin:
+    build:
+      context: ..
+      dockerfile: apps/brand-admin/Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: 3002
+      # Docker auto-populates HOSTNAME with the container ID; Next's
+      # standalone server.js binds to process.env.HOSTNAME when set, which
+      # then fails to bind at all. Force it back to a real bind address.
+      HOSTNAME: "0.0.0.0"
+    networks:
+      - edge
+    healthcheck:
+      # 127.0.0.1, not localhost: this musl/BusyBox wget resolves "localhost"
+      # to ::1 first, and Next's standalone server only binds the IPv4
+      # wildcard — the healthcheck failed here even though the app was
+      # actually up and reachable externally through Traefik the whole time.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3002/portal/login"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  super-admin:
+    build:
+      context: ..
+      dockerfile: apps/super-admin/Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: 3003
+      # See brand-admin's HOSTNAME comment above — same fix, same reason.
+      HOSTNAME: "0.0.0.0"
+    networks:
+      - edge
+    healthcheck:
+      # See brand-admin's healthcheck comment — same localhost/::1 issue.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3003/admin/login"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  verification-service:
+    build:
+      context: ..
+      dockerfile: apps/verification-service/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://supseal_verify:${SUPSEAL_VERIFY_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      HIDDEN_CODE_PEPPER: ${HIDDEN_CODE_PEPPER}
+      PORT: 3001
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - edge
+      - data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s

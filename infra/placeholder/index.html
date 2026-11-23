@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SUPSEAL</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #0a1018;
+    color: #eaf1fb;
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    padding: 24px;
+  }
+  .card {
+    max-width: 560px;
+    text-align: center;
+  }
+  .mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 56px;
+    height: 56px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, #3b8ae0, #6fd6f5);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.4), 0 10px 24px -8px rgba(59,138,224,0.55);
+    margin-bottom: 24px;
+    font-family: "Space Grotesk", Inter, sans-serif;
+    font-weight: 700;
+    color: #071019;
+    font-size: 22px;
+    letter-spacing: -0.5px;
+  }
+  h1 {
+    font-family: "Space Grotesk", Inter, sans-serif;
+    font-weight: 600;
+    font-size: 30px;
+    margin: 0 0 8px;
+    letter-spacing: -0.4px;
+  }
+  p.tagline {
+    color: #9bb0cc;
+    margin: 0 0 32px;
+    font-size: 15px;
+    line-height: 1.6;
+  }
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: #111b2d;
+    border: 1px solid #223353;
+    border-radius: 999px;
+    padding: 8px 16px;
+    font-size: 13px;
+    color: #9bb0cc;
+    margin-bottom: 28px;
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #3fd99a;
+    box-shadow: 0 0 0 3px rgba(63, 217, 154, 0.15);
+  }
+  .links {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    flex-wrap: wrap;
+    font-size: 13px;
+  }
+  .links a {
+    color: #8fc4f5;
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.15s ease;
+  }
+  .links a:hover {
+    border-bottom-color: #8fc4f5;
+  }
+  footer {
+    margin-top: 40px;
+    font-size: 12px;
+    color: #55648a;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="mark">SS</div>
+    <h1>SUPSEAL</h1>
+    <p class="tagline">Product authentication platform for supplements, cosmetics, perfumes, and pharmaceuticals.</p>
+    <div class="status"><span class="dot"></span>Platform online</div>
+    <div class="links">
+      <a href="/v">Verify a product</a>
+      <a href="/portal">Brand Portal</a>
+      <a href="/admin">Super Admin</a>
+    </div>
+    <footer>SUPSEAL &middot; Msaratech</footer>
+  </div>
+</body>
+</html>

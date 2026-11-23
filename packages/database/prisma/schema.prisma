@@ -1,0 +1,331 @@
+// SUPSEAL data model — see SUPSEAL_Technical_Plan_v1.0.md Section 7 for the ER diagram this mirrors.
+// Row-Level Security policies (Section 8) are applied via a separate SQL migration, not expressible in Prisma's schema DSL.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  BRAND_ADMIN
+  BRAND_STAFF
+}
+
+enum BrandStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum SubscriptionTier {
+  STARTER
+  GROWTH
+  ENTERPRISE
+}
+
+enum BillingStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELED
+}
+
+enum BatchStatus {
+  REQUESTED // legacy pre-approval flow — no longer created by the app; kept so historical rows still resolve
+  APPROVED // legacy pre-approval flow — no longer created by the app; kept so historical rows still resolve
+  PROCESSING // brand created the batch; the background queue is generating codes + the print-file PDF
+  CODES_GENERATED
+  SENT_TO_PRINT
+  SHIPPED
+  DELIVERED
+  RECONCILED
+  REVOKED
+  FAILED // queue job errored — see StickerBatch.failureReason
+}
+
+enum CodeStatus {
+  UNUSED
+  USED
+  REVOKED
+}
+
+enum VerificationResult {
+  VERIFIED
+  VERIFIED_BEFORE
+  UNVERIFIED
+}
+
+enum FraudSeverity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum FraudStatus {
+  OPEN
+  RESOLVED
+  ESCALATED
+}
+
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+model Brand {
+  id               String       @id @default(uuid())
+  name             String
+  industryCategory String       @map("industry_category")
+  status           BrandStatus  @default(ACTIVE)
+  logoUrl          String?      @map("logo_url")
+  description      String?
+  contactEmail     String?      @map("contact_email")
+  createdAt        DateTime     @default(now()) @map("created_at")
+  updatedAt        DateTime     @updatedAt @map("updated_at")
+
+  users            User[]
+  products         Product[]
+  subscription     Subscription?
+  supportTickets   SupportTicket[]
+
+  @@map("brands")
+}
+
+model User {
+  id           String     @id @default(uuid())
+  brandId      String?    @map("brand_id")
+  email        String     @unique
+  passwordHash String     @map("password_hash")
+  role         UserRole
+  mfaEnabled   Boolean    @default(false) @map("mfa_enabled")
+  mfaSecret    String?    @map("mfa_secret")
+  active       Boolean    @default(true)
+  lastLoginAt  DateTime?  @map("last_login_at")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  brand         Brand?         @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  refreshTokens RefreshToken[]
+  auditLogs     AuditLog[]
+  approvedBatches StickerBatch[] @relation("ApprovedBy")
+  requestedBatches StickerBatch[] @relation("RequestedBy")
+
+  @@index([brandId])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  tokenHash String   @map("token_hash")
+  expiresAt DateTime @map("expires_at")
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model Subscription {
+  id             String           @id @default(uuid())
+  brandId        String           @unique @map("brand_id")
+  tier           SubscriptionTier @default(STARTER)
+  renewalDate    DateTime?        @map("renewal_date")
+  billingStatus  BillingStatus    @default(ACTIVE) @map("billing_status")
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+
+  brand Brand @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
+
+model Product {
+  id                String   @id @default(uuid())
+  brandId           String   @map("brand_id")
+  name              String
+  sku               String
+  category          String
+  description       String?
+  usageInstructions String?  @map("usage_instructions")
+  imageUrl          String?  @map("image_url")
+  supportContact    String?  @map("support_contact")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  brand         Brand          @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  stickerBatches StickerBatch[]
+  reviews       Review[]
+
+  @@unique([brandId, sku])
+  @@index([brandId])
+  @@map("products")
+}
+
+model StickerBatch {
+  id            String      @id @default(uuid())
+  productId     String      @map("product_id")
+  quantity      Int
+  status        BatchStatus @default(PROCESSING)
+  requestedById String?     @map("requested_by_id")
+  approvedById  String?     @map("approved_by_id")
+  requestedAt   DateTime    @default(now()) @map("requested_at")
+  approvedAt    DateTime?   @map("approved_at")
+
+  // true = brand asked SUPSEAL to print & ship the physical stickers (shows
+  // up in the Super Admin print-request queue and drives the
+  // sent-to-print/shipped/delivered/reconciled fulfillment lifecycle below);
+  // false = self-print — the brand downloads the PDF and handles printing
+  // themselves, and the batch has nothing further for SUPSEAL to fulfill.
+  printRequested Boolean @default(false) @map("print_requested")
+
+  codesGeneratedAt DateTime? @map("codes_generated_at")
+  // Server-side path to the generated print-ready PDF (QR + hidden code per
+  // sticker) — see BatchQueueService. Never re-derivable from the DB alone
+  // since hidden codes are stored only as hashes; this file is the one
+  // durable copy of the plaintext codes, which is why it's downloaded
+  // through an authenticated, brand-scoped endpoint, not served as a
+  // static file.
+  pdfPath       String?   @map("pdf_path")
+  failureReason String?   @map("failure_reason")
+
+  sentToPrintAt DateTime? @map("sent_to_print_at")
+  shippedAt     DateTime? @map("shipped_at")
+  deliveredAt   DateTime? @map("delivered_at")
+  reconciledAt  DateTime? @map("reconciled_at")
+
+  product     Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  requestedBy User?         @relation("RequestedBy", fields: [requestedById], references: [id])
+  approvedBy  User?         @relation("ApprovedBy", fields: [approvedById], references: [id])
+  codes       StickerCode[]
+
+  @@index([productId])
+  @@index([status, printRequested])
+  @@map("sticker_batches")
+}
+
+model StickerCode {
+  id                String    @id @default(uuid())
+  batchId           String    @map("batch_id")
+  qrToken           String    @unique @map("qr_token")
+  hiddenCodeHash    String    @unique @map("hidden_code_hash")
+  status            CodeStatus @default(UNUSED)
+  firstVerifiedAt   DateTime? @map("first_verified_at")
+  verificationCount Int       @default(0) @map("verification_count")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  batch              StickerBatch        @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  verificationEvents VerificationEvent[]
+  supportTickets     SupportTicket[]
+
+  @@index([batchId])
+  @@map("sticker_codes")
+}
+
+model VerificationEvent {
+  id                String             @id @default(uuid())
+  codeId            String?            @map("code_id")
+  result            VerificationResult
+  deviceFingerprint String?            @map("device_fingerprint")
+  ipAddress         String?            @map("ip_address")
+  geoLocation       String?            @map("geo_location")
+  userAgent         String?            @map("user_agent")
+  createdAt         DateTime           @default(now()) @map("created_at")
+
+  // codeId is nullable: an UNVERIFIED result for a hidden code that matches
+  // no sticker_codes row (a guess, not a real code) still needs to be logged
+  // for fraud scoring (FR-FRD-02 — repeated UNVERIFIED results from a narrow
+  // source is itself a signal), even though there is no code row to attach to.
+  code       StickerCode? @relation(fields: [codeId], references: [id], onDelete: Cascade)
+  coupon     Coupon?
+  fraudFlags FraudFlag[]
+
+  @@index([codeId])
+  @@index([createdAt])
+  @@map("verification_events")
+}
+
+model Coupon {
+  id                  String   @id @default(uuid())
+  verificationEventId String   @unique @map("verification_event_id")
+  code                String   @unique
+  discountPct         Decimal  @default(5) @map("discount_pct")
+  redeemed            Boolean  @default(false)
+  expiresAt           DateTime @map("expires_at")
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  verificationEvent VerificationEvent @relation(fields: [verificationEventId], references: [id], onDelete: Cascade)
+
+  @@map("coupons")
+}
+
+model FraudFlag {
+  id                  String        @id @default(uuid())
+  verificationEventId String        @map("verification_event_id")
+  reason              String
+  severity            FraudSeverity @default(MEDIUM)
+  status              FraudStatus   @default(OPEN)
+  resolvedById        String?       @map("resolved_by_id")
+  resolvedAt          DateTime?     @map("resolved_at")
+  createdAt           DateTime      @default(now()) @map("created_at")
+
+  verificationEvent VerificationEvent @relation(fields: [verificationEventId], references: [id], onDelete: Cascade)
+
+  @@index([verificationEventId])
+  @@index([status])
+  @@map("fraud_flags")
+}
+
+model Review {
+  id        String   @id @default(uuid())
+  productId String   @map("product_id")
+  rating    Int
+  comment   String?
+  approved  Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+  @@map("reviews")
+}
+
+model SupportTicket {
+  id        String              @id @default(uuid())
+  brandId   String              @map("brand_id")
+  codeId    String?             @map("code_id")
+  subject   String
+  message   String?
+  status    SupportTicketStatus @default(OPEN)
+  createdAt DateTime            @default(now()) @map("created_at")
+  updatedAt DateTime            @updatedAt @map("updated_at")
+
+  brand Brand        @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  code  StickerCode? @relation(fields: [codeId], references: [id])
+
+  @@index([brandId])
+  @@map("support_tickets")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?  @map("user_id")
+  action    String
+  entity    String
+  entityId  String?  @map("entity_id")
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}

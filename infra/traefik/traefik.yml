@@ -1,0 +1,31 @@
+api:
+  dashboard: false
+
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+
+providers:
+  # File provider instead of the Docker provider: this Docker Engine build
+  # (29.x) rejects the fixed API version (1.24) Traefik's Docker client
+  # requests, with no working override found. The file provider sidesteps
+  # it entirely and, as a side benefit, means Traefik no longer needs the
+  # Docker socket mounted at all — one less container with host-level
+  # Docker access. Services are addressed by their Compose service name,
+  # which Docker's embedded DNS resolves on the shared network.
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+certificatesResolvers:
+  le:
+    acme:
+      email: admin@msaratech.com
+      storage: /letsencrypt/acme.json
+      httpChallenge:
+        entryPoint: web
+
+log:
+  level: INFO

@@ -1,0 +1,93 @@
+http:
+  routers:
+    platform-api:
+      rule: "Host(`supseal.msaratech.com`) && PathPrefix(`/api`)"
+      entryPoints: ["web"]
+      service: platform-api
+    platform-api-secure:
+      rule: "Host(`supseal.msaratech.com`) && PathPrefix(`/api`)"
+      entryPoints: ["websecure"]
+      service: platform-api
+      tls:
+        certResolver: le
+    verification:
+      rule: "Host(`supseal.msaratech.com`) && PathPrefix(`/verify`)"
+      entryPoints: ["web"]
+      service: verification
+    verification-secure:
+      rule: "Host(`supseal.msaratech.com`) && PathPrefix(`/verify`)"
+      entryPoints: ["websecure"]
+      service: verification
+      tls:
+        certResolver: le
+    brand-admin:
+      rule: "Host(`supseal.msaratech.com`) && PathPrefix(`/portal`)"
+      entryPoints: ["web"]
+      service: brand-admin
+    brand-admin-secure:
+      rule: "Host(`supseal.msaratech.com`) && PathPrefix(`/portal`)"
+      entryPoints: ["websecure"]
+      service: brand-admin
+      tls:
+        certResolver: le
+    super-admin:
+      rule: "Host(`supseal.msaratech.com`) && PathPrefix(`/admin`)"
+      entryPoints: ["web"]
+      service: super-admin
+    super-admin-secure:
+      rule: "Host(`supseal.msaratech.com`) && PathPrefix(`/admin`)"
+      entryPoints: ["websecure"]
+      service: super-admin
+      tls:
+        certResolver: le
+    consumer-web:
+      rule: "Host(`supseal.msaratech.com`) && PathPrefix(`/v`)"
+      entryPoints: ["web"]
+      service: consumer-web
+    consumer-web-secure:
+      rule: "Host(`supseal.msaratech.com`) && PathPrefix(`/v`)"
+      entryPoints: ["websecure"]
+      service: consumer-web
+      tls:
+        certResolver: le
+    # Catch-all for "/" and anything else — bare Host() with no PathPrefix
+    # is less specific than the routers above, so Traefik's default
+    # priority (longer rule = higher priority) already makes /api, /verify,
+    # /portal, /admin, and /v win over this one without needing an explicit
+    # priority.
+    placeholder:
+      rule: "Host(`supseal.msaratech.com`)"
+      entryPoints: ["web"]
+      service: placeholder
+    placeholder-secure:
+      rule: "Host(`supseal.msaratech.com`)"
+      entryPoints: ["websecure"]
+      service: placeholder
+      tls:
+        certResolver: le
+
+  services:
+    platform-api:
+      loadBalancer:
+        servers:
+          - url: "http://platform-api:3000"
+    verification:
+      loadBalancer:
+        servers:
+          - url: "http://verification-service:3001"
+    brand-admin:
+      loadBalancer:
+        servers:
+          - url: "http://brand-admin:3002"
+    super-admin:
+      loadBalancer:
+        servers:
+          - url: "http://super-admin:3003"
+    placeholder:
+      loadBalancer:
+        servers:
+          - url: "http://placeholder:80"
+    consumer-web:
+      loadBalancer:
+        servers:
+          - url: "http://consumer-web:3004"
